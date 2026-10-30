@@ -1,0 +1,7 @@
+build/*
+!build/app.rsp
+*.user
+*.suo
+.vs/
+bin/
+obj/
