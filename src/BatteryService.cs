@@ -26,11 +26,15 @@ namespace BatteryWidget
         private readonly object _pendingLock = new object();
         private readonly Thread _worker;
 
+        private const int PresenceGraceSeconds = 90;
+
         private volatile bool _stop;
         private bool _fullPending;
         private DeviceReading _lastKeyboard;
         private DeviceReading _lastMouse;
         private DeviceReading _lastGamepad;
+        private DateTime _keyboardMissingSince = DateTime.MinValue;
+        private DateTime _mouseMissingSince = DateTime.MinValue;
 
         public event EventHandler<ReadingsEventArgs> ReadingsReady;
 
@@ -112,8 +116,10 @@ namespace BatteryWidget
             List<PnpBatteryInfo> bluetoothDevices = _bluetooth.Scan();
 
             DeviceReadings readings = new DeviceReadings();
-            readings.Keyboard = UseCache(ReadKeyboard(bluetoothDevices), ref _lastKeyboard);
-            readings.Mouse = UseCache(ReadMouse(), ref _lastMouse);
+            readings.Keyboard = UseCache(ApplyPresence(ReadKeyboard(bluetoothDevices),
+                ref _keyboardMissingSince, "VGN V98 Pro V3", "键盘已断开"), ref _lastKeyboard);
+            readings.Mouse = UseCache(ApplyPresence(ReadMouse(),
+                ref _mouseMissingSince, "GPW2", "鼠标已断开"), ref _lastMouse);
             readings.Gamepad = UseCache(ReadGamepad(bluetoothDevices), ref _lastGamepad);
             readings.UpdatedAt = DateTime.Now;
             readings.GamepadOnly = false;
@@ -154,6 +160,11 @@ namespace BatteryWidget
                     ToChargeState(bluetooth.Charging));
             }
 
+            if (_lastKeyboard != null && _lastKeyboard.Tag == "蓝牙")
+            {
+                return DeviceReading.Failure("VGN V98 Pro V3", ReadingState.NotConnected, "蓝牙键盘已断开");
+            }
+
             return wireless;
         }
 
@@ -165,13 +176,13 @@ namespace BatteryWidget
         private static DeviceReading ReadGamepad(List<PnpBatteryInfo> bluetoothDevices)
         {
             PnpBatteryInfo bluetooth = BluetoothBatteryProvider.FindGamepad(bluetoothDevices);
-            if (bluetooth != null && bluetooth.BatteryPercent.HasValue)
+            if (bluetooth != null && bluetooth.BatteryPercent.HasValue && XInput.AnyControllerConnected())
             {
                 return DeviceReading.From("Xbox Series", "蓝牙", bluetooth.BatteryPercent.Value,
                     ToChargeState(bluetooth.Charging));
             }
 
-            return DeviceReading.Failure("Xbox Series", ReadingState.NotConnected, "未找到蓝牙手柄电量");
+            return DeviceReading.Failure("Xbox Series", ReadingState.NotConnected, "手柄已休眠或未连接");
         }
 
         private static DeviceReadings BuildFailureReadings(string detail)
@@ -183,8 +194,40 @@ namespace BatteryWidget
             return readings;
         }
 
+        private static DeviceReading ApplyPresence(
+            DeviceReading reading, ref DateTime missingSince, string name, string detail)
+        {
+            if (reading == null)
+            {
+                return null;
+            }
+
+            if (reading.State != ReadingState.NoResponse && reading.State != ReadingState.Error)
+            {
+                missingSince = DateTime.MinValue;
+                return reading;
+            }
+
+            if (missingSince == DateTime.MinValue)
+            {
+                missingSince = DateTime.UtcNow;
+            }
+            if ((DateTime.UtcNow - missingSince).TotalSeconds >= PresenceGraceSeconds)
+            {
+                return DeviceReading.Failure(name, ReadingState.NotConnected, detail);
+            }
+
+            return reading;
+        }
+
         private static DeviceReading UseCache(DeviceReading fresh, ref DeviceReading cache)
         {
+            if (fresh != null && fresh.State == ReadingState.NotConnected)
+            {
+                cache = null;
+                return fresh;
+            }
+
             if (fresh != null && fresh.State == ReadingState.Ok)
             {
                 cache = fresh;

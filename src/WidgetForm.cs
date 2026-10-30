@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
@@ -18,6 +19,9 @@ namespace BatteryWidget
         private const int HTCAPTION = 2;
         private const int BaseWidth = 304;
         private const int BaseHeight = 168;
+        private const int RowTopBase = 40;
+        private const int RowStepBase = 36;
+        private const int ContentTopBase = 60;
         private const int GamepadFullscreenCheckSeconds = 180;
         private const int DockStripBase = 14;
         private const int DockSnapBase = 10;
@@ -69,6 +73,7 @@ namespace BatteryWidget
         private DateTime _lastGamepadCheck = DateTime.MinValue;
         private DateTime _lastRequestAt = DateTime.MinValue;
         private DateTime _lastExternalRefresh = DateTime.MinValue;
+        private bool? _gamepadLinkConnected;
         private DeviceReadings _readings;
 
         private DockEdge _dockEdge = DockEdge.None;
@@ -275,12 +280,21 @@ namespace BatteryWidget
             }
 
             int rowWidth = width - P(36);
-            DrawDeviceRow(graphics, P(18), P(40), rowWidth,
-                _readings == null ? null : _readings.Keyboard, "VGN V98 Pro V3");
-            DrawDeviceRow(graphics, P(18), P(76), rowWidth,
-                _readings == null ? null : _readings.Mouse, "GPW2");
-            DrawDeviceRow(graphics, P(18), P(112), rowWidth,
-                _readings == null ? null : _readings.Gamepad, "Xbox Series");
+            List<DeviceRow> rows = BuildRows();
+            if (rows.Count == 0)
+            {
+                TextRenderer.DrawText(graphics, "暂未识别设备连接", _nameFont,
+                    new Rectangle(P(18), P(RowTopBase), rowWidth, P(20)), MutedColor,
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+            }
+            else
+            {
+                for (int i = 0; i < rows.Count; i++)
+                {
+                    DrawDeviceRow(graphics, P(18), P(RowTopBase + RowStepBase * i), rowWidth,
+                        rows[i].Reading, rows[i].FallbackName);
+                }
+            }
 
             bool dockStrip = _dockEdge != DockEdge.None && _dockHidden;
             if (!dockStrip)
@@ -316,12 +330,114 @@ namespace BatteryWidget
             }
         }
 
+        private sealed class DeviceRow
+        {
+            public DeviceReading Reading;
+            public string FallbackName;
+        }
+
+        private List<DeviceRow> BuildRows()
+        {
+            List<DeviceRow> rows = new List<DeviceRow>();
+            if (_readings == null)
+            {
+                AddLoadingRow(rows, "VGN V98 Pro V3");
+                AddLoadingRow(rows, "GPW2");
+                AddLoadingRow(rows, "Xbox Series");
+                return rows;
+            }
+
+            AddDeviceRow(rows, _readings.Keyboard, "VGN V98 Pro V3");
+            AddDeviceRow(rows, _readings.Mouse, "GPW2");
+            AddDeviceRow(rows, _readings.Gamepad, "Xbox Series");
+            return rows;
+        }
+
+        private static void AddLoadingRow(List<DeviceRow> rows, string fallbackName)
+        {
+            DeviceRow row = new DeviceRow();
+            row.FallbackName = fallbackName;
+            rows.Add(row);
+        }
+
+        private static void AddDeviceRow(List<DeviceRow> rows, DeviceReading reading, string fallbackName)
+        {
+            if (reading == null
+                || reading.State == ReadingState.NotConnected
+                || reading.State == ReadingState.NoResponse)
+            {
+                return;
+            }
+
+            DeviceRow row = new DeviceRow();
+            row.Reading = reading;
+            row.FallbackName = fallbackName;
+            rows.Add(row);
+        }
+
+        private int GetDesiredHeight()
+        {
+            int rows = BuildRows().Count;
+            return P(ContentTopBase + RowStepBase * Math.Max(1, rows));
+        }
+
+        private void ApplyAdaptiveHeight()
+        {
+            if (!IsHandleCreated || IsDisposed)
+            {
+                return;
+            }
+
+            int desired = GetDesiredHeight();
+            if (ClientSize.Height == desired)
+            {
+                return;
+            }
+
+            int oldBottom = Bottom;
+            bool wasAnimating = _animating;
+            if (wasAnimating)
+            {
+                _animating = false;
+                _dockTimer.Stop();
+            }
+
+            ClientSize = new Size(ClientSize.Width, desired);
+            ApplyRegion();
+
+            if (!_positionInitialized)
+            {
+                return;
+            }
+
+            if (_dockEdge != DockEdge.None)
+            {
+                Location = DockPosition(_dockArea, _dockEdge, _dockHidden, Location);
+                if (wasAnimating && _dockHidden)
+                {
+                    _hiddenAt = DateTime.UtcNow;
+                }
+            }
+            else
+            {
+                Rectangle area = WorkAreaFromWindow();
+                Location = new Point(
+                    Clamp(Location.X, area.Left, area.Right - Width),
+                    Clamp(oldBottom - Height, area.Top, area.Bottom - Height));
+            }
+        }
+
         private bool HasStaleReading()
         {
-            return _readings != null
-                && ((_readings.Keyboard != null && _readings.Keyboard.Stale)
-                    || (_readings.Mouse != null && _readings.Mouse.Stale)
-                    || (_readings.Gamepad != null && _readings.Gamepad.Stale));
+            List<DeviceRow> rows = BuildRows();
+            for (int i = 0; i < rows.Count; i++)
+            {
+                if (rows[i].Reading != null && rows[i].Reading.Stale)
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private void DrawDeviceRow(Graphics graphics, int x, int y, int rowWidth, DeviceReading reading, string fallbackName)
@@ -642,6 +758,7 @@ namespace BatteryWidget
             }
 
             _refreshing = false;
+            ApplyAdaptiveHeight();
             if (_refreshQueued)
             {
                 _refreshQueued = false;
@@ -733,6 +850,17 @@ namespace BatteryWidget
             {
                 _lastGamepadCheck = DateTime.UtcNow;
                 _service.RequestGamepadOnly();
+            }
+
+            if (!_inFullscreen && Visible)
+            {
+                bool gamepadConnected = XInput.AnyControllerConnected();
+                if (_gamepadLinkConnected.HasValue && _gamepadLinkConnected.Value != gamepadConnected)
+                {
+                    Logger.Info(gamepadConnected ? "检测到手柄已连接" : "检测到手柄已休眠或断开");
+                    RequestRefresh();
+                }
+                _gamepadLinkConnected = gamepadConnected;
             }
 
             if (!_inFullscreen && Visible && !_refreshing)

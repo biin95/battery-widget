@@ -17,7 +17,6 @@ internal static class Preview
         {
             form.CreateControl();
             IntPtr handle = form.Handle;
-            form.ClientSize = new Size(304, 168);
 
             Render(form, BuildReadings(
                     "VGN V98 Pro V3", "2.4G", 74, ChargeState.Discharging,
@@ -41,6 +40,12 @@ internal static class Preview
 
             Render(form, null, true, @"E:\my_pro\build\preview-loading.png");
 
+            DeviceReadings empty = new DeviceReadings();
+            empty.Keyboard = DeviceReading.Failure("VGN V98 Pro V3", ReadingState.NotConnected, "未连接");
+            empty.Mouse = DeviceReading.Failure("GPW2", ReadingState.NotConnected, "未连接");
+            empty.Gamepad = DeviceReading.Failure("Xbox Series", ReadingState.NotConnected, "未连接");
+            Render(form, empty, false, @"E:\my_pro\build\preview-empty.png");
+
             GC.KeepAlive(handle);
         }
 
@@ -52,6 +57,7 @@ internal static class Preview
         SetField(form, "_readings", readings);
         SetField(form, "_refreshing", refreshing);
         SetField(form, "_lastUpdated", refreshing ? DateTime.MinValue : DateTime.Now);
+        Invoke(form, "ApplyAdaptiveHeight");
 
         using (Bitmap bitmap = new Bitmap(form.ClientSize.Width, form.ClientSize.Height))
         {
@@ -84,5 +90,15 @@ internal static class Preview
             throw new InvalidOperationException("field not found: " + name);
         }
         field.SetValue(target, value);
+    }
+
+    private static void Invoke(object target, string name)
+    {
+        MethodInfo method = target.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic);
+        if (method == null)
+        {
+            throw new InvalidOperationException("method not found: " + name);
+        }
+        method.Invoke(target, null);
     }
 }

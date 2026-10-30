@@ -13,10 +13,11 @@ namespace BatteryWidget.Providers
                 List<PnpBatteryInfo> devices = PnpBatteryReader.ReadAll();
                 for (int i = 0; i < devices.Count; i++)
                 {
-                    Logger.Info("BLE设备: " + devices[i].ToString()
-                        + " | 名称=" + (devices[i].FriendlyName ?? "")
-                        + " | 父节点=" + devices[i].IsBleParent
-                        + (devices[i].Children == null ? "" : " | 子节点=" + string.Join(" ; ", devices[i].Children.ToArray())));
+                    PnpBatteryInfo info = devices[i];
+                    Logger.Info(string.Format("BLE设备: {0} | 电量={1} | 充电={2}",
+                        String.IsNullOrEmpty(info.FriendlyName) ? "(未知)" : info.FriendlyName,
+                        info.BatteryPercent.HasValue ? info.BatteryPercent.Value.ToString() + "%" : "-",
+                        info.Charging.HasValue ? info.Charging.Value.ToString() : "-"));
                 }
                 return devices;
             }

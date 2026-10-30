@@ -5,6 +5,7 @@
 src\Interop\NativeMethods.cs
 src\Interop\HidDevice.cs
 src\Interop\PnpBattery.cs
+src\Interop\XInput.cs
 src\Providers\VgnKeyboardProvider.cs
 src\Providers\LogitechMouseProvider.cs
 src\Providers\LogitechMouseMonitor.cs
